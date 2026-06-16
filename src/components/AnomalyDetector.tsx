@@ -74,6 +74,11 @@ export default function AnomalyDetector({ onAppendLedger, onStateUpdate, onTrigg
   const [fCritical, setFCritical] = useState<number>(3.18); // df1 = 9, df2 = 9 for 10 samples
   const [pValue, setPValue] = useState<number>(0.48);
 
+  // F-Distribution Filter States
+  const [fFilter, setFFilter] = useState<'all' | 'moderate' | 'severe' | 'extreme' | 'custom'>('all');
+  const [customRangeMin, setCustomRangeMin] = useState<number>(1.0);
+  const [customRangeMax, setCustomRangeMax] = useState<number>(15.0);
+
   const getFDistributionPlotData = () => {
     // Generate approximate F-distribution probability density curve (df1=9, df2=9)
     const points = [];
@@ -126,20 +131,22 @@ export default function AnomalyDetector({ onAppendLedger, onStateUpdate, onTrigg
     setPValue(parseFloat(computedP.toFixed(3)));
 
     const isAnomalous = computedF > criticalF;
+    const nextState = isAnomalous ? "anomaly" : computedF > (criticalF * 0.7) ? "warning" : "healthy";
 
-    // Update active resource state
-    setResources(prev =>
-      prev.map(res => {
-        if (res.id === activeResId) {
-          return {
-            ...res,
-            value: parseFloat(samples[n - 1].toFixed(1)),
-            state: isAnomalous ? "anomaly" : computedF > (criticalF * 0.7) ? "warning" : "healthy"
-          };
-        }
-        return res;
-      })
-    );
+    // Update active resource state ONLY if the state actually changed to prevent infinite loops from reference updates
+    if (currentRes.state !== nextState) {
+      setResources(prev =>
+        prev.map(res => {
+          if (res.id === activeResId) {
+            return {
+              ...res,
+              state: nextState
+            };
+          }
+          return res;
+        })
+      );
+    }
 
     // If statistical threshold is breached, register anomaly
     if (isAnomalous && !anomalies.some(a => a.resourceId === activeResId && (Date.now() - new Date(a.timestamp).getTime() < 12000))) {
@@ -248,6 +255,51 @@ export default function AnomalyDetector({ onAppendLedger, onStateUpdate, onTrigg
       case 'model': return <Cpu className={`w-5 h-5 ${colorClass}`} />;
     }
   };
+
+  // Categorize anomalies based on F-distribution thresholds relative to critical value
+  const getAnomalyCounts = () => {
+    let moderate = 0;
+    let severe = 0;
+    let extreme = 0;
+    anomalies.forEach(anom => {
+      const crit = anom.criticalValueF;
+      const ratio = anom.testStatF;
+      if (ratio >= crit && ratio < crit * 1.5) {
+        moderate++;
+      } else if (ratio >= crit * 1.5 && ratio < crit * 3.0) {
+        severe++;
+      } else if (ratio >= crit * 3.0) {
+        extreme++;
+      }
+    });
+    return {
+      all: anomalies.length,
+      moderate,
+      severe,
+      extreme
+    };
+  };
+
+  const counts = getAnomalyCounts();
+
+  const filteredAnomalies = anomalies.filter(anom => {
+    if (fFilter === 'all') return true;
+    const crit = anom.criticalValueF;
+    const ratio = anom.testStatF;
+    if (fFilter === 'moderate') {
+      return ratio >= crit && ratio < crit * 1.5;
+    }
+    if (fFilter === 'severe') {
+      return ratio >= crit * 1.5 && ratio < crit * 3.0;
+    }
+    if (fFilter === 'extreme') {
+      return ratio >= crit * 3.0;
+    }
+    if (fFilter === 'custom') {
+      return ratio >= customRangeMin && ratio <= customRangeMax;
+    }
+    return true;
+  });
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6" id="VeklomAnomalyDetector">
@@ -442,19 +494,122 @@ export default function AnomalyDetector({ onAppendLedger, onStateUpdate, onTrigg
           <div className="flex items-center justify-between mb-3 border-b border-slate-900 pb-2">
             <div className="flex items-center gap-1.5">
               <Bell className="text-red-400 w-4 h-4 animate-pulse" />
-              <span className="text-xs font-mono font-bold text-red-400">ANOMALY REVIEW BOARD</span>
+              <span className="text-xs font-mono font-bold text-red-400 font-semibold text-red-400">ANOMALY REVIEW BOARD</span>
             </div>
-            <span className="text-[10px] font-mono text-slate-500 font-semibold">{anomalies.length} Flagged</span>
+            <span className="text-[10px] font-mono text-slate-500 font-semibold">{filteredAnomalies.length} / {anomalies.length}</span>
           </div>
 
-          <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto custom-scroll pr-1">
-            {anomalies.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-slate-500 text-center font-mono">
-                <CheckCircle2 className="w-8 h-8 text-cyan-550/50 mb-2" />
-                <span className="text-xs">No active anomalies detected. Substrate operations run cleanly.</span>
+          {/* Filtering Interface */}
+          <div className="mb-4 bg-[#05070a]/60 border border-slate-900 rounded-lg p-2.5 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] uppercase font-mono text-cyan-400 font-extrabold tracking-wider">
+                F-Distribution Filter
+              </span>
+              <span className="text-[8px] font-mono text-slate-500">(df1=9, df2=9)</span>
+            </div>
+
+            {/* Presets Grid */}
+            <div className="grid grid-cols-2 gap-1 text-[9px] font-mono">
+              <button
+                onClick={() => setFFilter('all')}
+                className={`py-1 px-1 rounded border transition-all text-center cursor-pointer truncate ${
+                  fFilter === 'all'
+                    ? 'bg-cyan-950/40 border-cyan-500/50 text-cyan-400 font-bold shadow-[0_0_8px_rgba(6,182,212,0.1)]'
+                    : 'bg-transparent border-slate-900 text-slate-400 hover:text-slate-200 hover:border-slate-805'
+                }`}
+                title="All detected anomalies"
+              >
+                All ({counts.all})
+              </button>
+              <button
+                onClick={() => setFFilter('moderate')}
+                className={`py-1 px-1 rounded border transition-all text-center cursor-pointer truncate ${
+                  fFilter === 'moderate'
+                    ? 'bg-amber-950/40 border-amber-500/50 text-amber-400 font-bold shadow-[0_0_8px_rgba(245,158,11,0.1)]'
+                    : 'bg-transparent border-slate-900 text-slate-400 hover:text-slate-200 hover:border-slate-805'
+                }`}
+                title="F_crit <= F < 1.5 * F_crit (Moderate deviance)"
+              >
+                Mod ({counts.moderate})
+              </button>
+              <button
+                onClick={() => setFFilter('severe')}
+                className={`py-1 px-1 rounded border transition-all text-center cursor-pointer truncate ${
+                  fFilter === 'severe'
+                    ? 'bg-orange-950/40 border-orange-500/50 text-orange-400 font-bold shadow-[0_0_8px_rgba(249,115,22,0.1)]'
+                    : 'bg-transparent border-slate-900 text-slate-400 hover:text-slate-200 hover:border-slate-805'
+                }`}
+                title="1.5 * F_crit <= F < 3.0 * F_crit (Significant drift)"
+              >
+                Sev ({counts.severe})
+              </button>
+              <button
+                onClick={() => setFFilter('extreme')}
+                className={`py-1 px-1 rounded border transition-all text-center cursor-pointer truncate ${
+                  fFilter === 'extreme'
+                    ? 'bg-red-950/30 border-red-500/50 text-red-400 font-bold shadow-[0_0_8px_rgba(239,68,68,0.1)]'
+                    : 'bg-transparent border-slate-900 text-slate-400 hover:text-slate-200 hover:border-slate-805'
+                }`}
+                title="F >= 3.0 * F_crit (Severe breach)"
+              >
+                Ext ({counts.extreme})
+              </button>
+            </div>
+
+            {/* Custom Range select button */}
+            <button
+              onClick={() => setFFilter('custom')}
+              className={`w-full py-1 text-[9px] font-mono rounded border transition-all text-center cursor-pointer ${
+                fFilter === 'custom'
+                  ? 'bg-cyan-950/40 border-cyan-500/40 text-cyan-300 font-bold shadow-[0_0_8px_rgba(6,182,212,0.1)]'
+                  : 'bg-transparent border-slate-900 text-slate-500 hover:text-slate-300 hover:border-slate-805'
+              }`}
+            >
+              Custom Range Slider...
+            </button>
+
+            {/* Custom Range Sliders */}
+            {fFilter === 'custom' && (
+              <div className="space-y-1.5 mt-1 pt-2 border-t border-slate-900 text-[9px] font-mono text-slate-400">
+                <div className="flex justify-between items-center">
+                  <span>Min F-Ratio:</span>
+                  <span className="text-cyan-400 font-bold">{customRangeMin.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="1.0"
+                  max="5.0"
+                  step="0.1"
+                  value={customRangeMin}
+                  onChange={(e) => setCustomRangeMin(parseFloat(e.target.value))}
+                  className="w-full h-1 bg-slate-850 rounded appearance-none cursor-pointer accent-cyan-500"
+                />
+
+                <div className="flex justify-between items-center mt-1">
+                  <span>Max F-Ratio:</span>
+                  <span className="text-cyan-350 font-bold text-cyan-350">{customRangeMax.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="5.0"
+                  max="40.0"
+                  step="0.5"
+                  value={customRangeMax}
+                  onChange={(e) => setCustomRangeMax(parseFloat(e.target.value))}
+                  className="w-full h-1 bg-slate-850 rounded appearance-none cursor-pointer accent-cyan-500"
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto custom-scroll pr-1">
+            {filteredAnomalies.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 text-slate-500 text-center font-mono">
+                <CheckCircle2 className="w-6 h-6 text-cyan-550/30 mb-2" />
+                <span className="text-[10px]">No anomalies match the F-distribution filter.</span>
               </div>
             ) : (
-              anomalies.map((anom) => (
+              filteredAnomalies.map((anom) => (
                 <div 
                   key={anom.id}
                   className="bg-red-950/10 border border-red-900/40 p-2.5 rounded text-[10px] font-mono leading-relaxed"
@@ -470,9 +625,9 @@ export default function AnomalyDetector({ onAppendLedger, onStateUpdate, onTrigg
                   <div className="flex justify-between items-center text-[9px] text-slate-400 pt-1.5 border-t border-red-950">
                     <span className="flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 inline-block animate-pulse" />
-                      Auto-Response: QUARANTINED
+                      Auto: QUARANTINED
                     </span>
-                    <span className="text-red-300 font-bold bg-red-950/60 px-1.5 py-0.5 rounded">p: {anom.pValue}</span>
+                    <span className="text-cyan-400 font-bold bg-cyan-950/40 border border-cyan-800/30 px-1.5 py-0.5 rounded">F: {anom.testStatF.toFixed(2)}</span>
                   </div>
                 </div>
               ))
