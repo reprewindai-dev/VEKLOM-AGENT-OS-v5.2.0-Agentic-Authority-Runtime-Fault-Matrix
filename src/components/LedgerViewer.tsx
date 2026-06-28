@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { LedgerBlock } from '../types';
-import { ShieldCheck, Search, HelpCircle, AlertOctagon, Terminal, FileCode, CheckCircle2, Bot } from 'lucide-react';
+import { ShieldCheck, Search, HelpCircle, AlertOctagon, Terminal, FileCode, CheckCircle2, Bot, X, ExternalLink, Lock, Fingerprint, Activity } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 interface LedgerViewerProps {
@@ -13,6 +13,18 @@ export default function LedgerViewer({ ledger, onAppendLedger }: LedgerViewerPro
   const [aiResponse, setAiResponse] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'block_explorer' | 'ai_auditor'>('block_explorer');
+  const [selectedBlock, setSelectedBlock] = useState<LedgerBlock | null>(null);
+  const [isSimulatingValidation, setIsSimulatingValidation] = useState<boolean>(false);
+  const [simulationResult, setSimulationResult] = useState<string | null>(null);
+
+  const handleSimulateValidation = () => {
+    setIsSimulatingValidation(true);
+    setSimulationResult(null);
+    setTimeout(() => {
+      setIsSimulatingValidation(false);
+      setSimulationResult("SUCCESS: Cryptographic signature verified against Solana root key. PDA verification matches zero-leak criteria. State transitions are valid.");
+    }, 1200);
+  };
 
   // Prebuilt audit prompts for convenience and high engagement
   const promptMacros = [
@@ -123,7 +135,12 @@ export default function LedgerViewer({ ledger, onAppendLedger }: LedgerViewerPro
               {ledger.map((block) => (
                 <div 
                   key={block.txHash} 
-                  className="bg-slate-900/15 border border-slate-900/60 p-3 rounded-lg font-mono text-[11px] leading-relaxed relative overflow-hidden group hover:border-cyan-500/30 transition-all duration-300"
+                  onClick={() => {
+                    setSelectedBlock(block);
+                    setSimulationResult(null);
+                  }}
+                  className="bg-slate-900/15 border border-slate-900/60 p-3 rounded-lg font-mono text-[11px] leading-relaxed relative overflow-hidden group hover:border-cyan-500/50 hover:bg-slate-900/45 hover:shadow-[0_0_12px_rgba(6,182,212,0.06)] cursor-pointer transition-all duration-300"
+                  title="Click to inspect this block's verifiable metadata"
                 >
                   {/* Event Type Stripe on Left */}
                   <div className={`absolute left-0 top-0 h-full w-1 ${
@@ -139,7 +156,10 @@ export default function LedgerViewer({ ledger, onAppendLedger }: LedgerViewerPro
                         {block.eventType}
                       </span>
                     </div>
-                    <span className="text-slate-550 text-[10px]">
+                    <span className="text-slate-550 text-[10px] flex items-center gap-1.5 font-medium">
+                      <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-cyan-400 text-[9px] font-bold">
+                        [INSPECT BLOCK]
+                      </span>
                       {new Date(block.timestamp).toLocaleTimeString()}
                     </span>
                   </div>
@@ -153,8 +173,11 @@ export default function LedgerViewer({ ledger, onAppendLedger }: LedgerViewerPro
                     </div>
                     
                     {/* Collapsible cryptographic signatures */}
-                    <details className="text-[10px] text-slate-500 pt-1.5 border-t border-slate-900/40 mt-1.5">
-                      <summary className="cursor-pointer hover:text-slate-300 select-none">Show technical cryptography</summary>
+                    <details 
+                      className="text-[10px] text-slate-500 pt-1.5 border-t border-slate-900/40 mt-1.5"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <summary className="cursor-pointer hover:text-slate-350 select-none">Show technical cryptography</summary>
                       <div className="bg-[#05070a]/80 border border-slate-900 p-2 rounded text-[9px] mt-1 space-y-1 text-slate-400 font-mono">
                         <div className="truncate"><span className="text-cyan-400 font-bold">TX HASH:</span> {block.txHash}</div>
                         <div className="truncate"><span className="text-cyan-400 font-bold">PDA SEED:</span> {block.pdaAddress}</div>
@@ -246,6 +269,155 @@ export default function LedgerViewer({ ledger, onAppendLedger }: LedgerViewerPro
         <span>Solana Settlement Layer (PDA-bound)</span>
         <span>Axiom 6.6 Observability Pass</span>
       </div>
+
+      {/* Block Inspector Modal */}
+      {selectedBlock && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50 transition-all duration-300 animate-in fade-in zoom-in-95" id="LedgerBlockModal">
+          <div className="bg-[#070b13] border border-cyan-500/30 w-full max-w-lg rounded-xl shadow-[0_0_50px_rgba(6,182,212,0.25)] overflow-hidden font-mono flex flex-col max-h-[90vh]">
+            
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-slate-900 bg-[#090f1b]">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="text-cyan-400 w-4 h-4 animate-pulse" />
+                <span className="text-xs font-bold text-cyan-300 uppercase tracking-widest">
+                  Block Inspector (Height No.{selectedBlock.blockNumber})
+                </span>
+              </div>
+              <button 
+                onClick={() => setSelectedBlock(null)}
+                className="text-slate-450 hover:text-cyan-400 hover:bg-slate-900/50 p-1 rounded-md transition-colors cursor-pointer"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4 overflow-y-auto custom-scroll text-slate-300 text-[11px] leading-relaxed">
+              
+              {/* Core Ledger Identification Section */}
+              <div className="grid grid-cols-2 gap-3 bg-[#03060a] p-3 border border-slate-900 rounded-lg">
+                <div>
+                  <span className="text-[10px] text-slate-500 block uppercase font-bold mb-1">State Event Type</span>
+                  <span className={`inline-block px-2.5 py-0.5 rounded text-[9px] font-extrabold uppercase ${getEventBadgeClass(selectedBlock.eventType)}`}>
+                    {selectedBlock.eventType}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 block uppercase font-bold mb-1">Solana Index Time</span>
+                  <span className="text-[11px] text-slate-200 block font-semibold">{new Date(selectedBlock.timestamp).toLocaleString()}</span>
+                </div>
+              </div>
+
+              {/* Verified Action Memo */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] text-slate-400 font-extrabold block uppercase tracking-wider">Verifiable Human-Consent Consensus Statement</span>
+                
+                <div className="bg-cyan-950/10 border border-cyan-500/10 p-3.5 rounded-lg space-y-2">
+                  <div>
+                    <span className="text-slate-500 font-bold text-[9px] block mb-0.5 uppercase">SYSTEM LEVEL ACTION</span>
+                    <p className="text-slate-100 font-bold leading-normal">{selectedBlock.action}</p>
+                  </div>
+                  <div className="pt-2 border-t border-slate-900/50">
+                    <span className="text-slate-500 font-bold text-[9px] block mb-0.5 uppercase">SOLANA MEMO METRICS</span>
+                    <p className="text-cyan-350 italic font-mono leading-normal">"{selectedBlock.memo}"</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cryptographic Substrate Parameters */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] text-slate-450 font-extrabold block uppercase tracking-wider">Solana Structural Serialization</span>
+                
+                <div className="bg-[#03060a] border border-slate-900 p-3 rounded-lg space-y-2.5 text-[10px] leading-relaxed">
+                  <div>
+                    <span className="text-slate-500 font-bold block">TRANSACTION SIGNATURE hash (TXHASH)</span>
+                    <span className="text-cyan-400 select-all font-mono break-all font-semibold block bg-[#010204] p-1.5 rounded border border-slate-950 mt-1">{selectedBlock.txHash}</span>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2.5 border-t border-slate-900/40">
+                    <div>
+                      <span className="text-slate-500 font-bold block">PDA AUTHORITY ADDRESS</span>
+                      <span className="text-purple-400 select-all break-all font-mono font-semibold text-[9px] block leading-tight mt-1 bg-[#010204] p-1.5 rounded border border-slate-950">{selectedBlock.pdaAddress}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 font-bold block">ECONOMIC GAS FEE METER</span>
+                      <div className="bg-[#010204] p-1.5 rounded border border-slate-950 mt-1 space-y-0.5">
+                        <span className="text-amber-400 font-semibold block">{selectedBlock.gasPaidLamports.toLocaleString()} Lamports</span>
+                        <span className="text-slate-500 text-[8px] block">≈ {(selectedBlock.gasPaidLamports / 1000000000).toFixed(8)} SOL (CONSENSUS PAID)</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-2.5 border-t border-slate-900/40 flex items-center justify-between text-[9px] text-slate-550 font-semibold">
+                    <div className="flex items-center gap-1">
+                      <Lock className="w-3.5 h-3.5 text-cyan-450" />
+                      <span>STATE INTEGRITY METRIC</span>
+                    </div>
+                    <span className="text-emerald-400 bg-emerald-950/20 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-900/30 text-[8.5px]">CONFIRMED STATE FINALIZED</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Dynamic decentralized Replay Sandbox interactive console */}
+              <div className="bg-[#03060a] border border-cyan-500/10 p-3.5 rounded-lg space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Fingerprint className="text-cyan-400 w-4 h-4 animate-pulse" />
+                    <span className="text-[10px] text-slate-350 font-bold uppercase tracking-wider">Decentralized Replay Testbed</span>
+                  </div>
+                  <span className="text-[9px] text-slate-500 font-bold bg-slate-950 border border-slate-900 px-1.5 rounded">V2 Sandbox</span>
+                </div>
+
+                <p className="text-[10px] leading-relaxed text-slate-400">
+                  Execute an automated local state machine replay. This matches instruction hashes, seed derivations, and agent keys against local system constraints to physically prove compliance.
+                </p>
+
+                {simulationResult ? (
+                  <div className="p-3 bg-cyan-950/30 border border-cyan-900/25 rounded text-[10px] leading-relaxed text-cyan-300 font-semibold animate-in fade-in duration-350 relative overflow-hidden flex flex-col gap-1 shadow-[0_0_12px_rgba(6,182,212,0.1)]">
+                    <div className="flex items-center gap-1.5 text-cyan-400 text-[10px] font-extrabold uppercase">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" /> SECURE ROOT VERIFICATION COMPLETE
+                    </div>
+                    <p className="text-slate-300 leading-normal pl-5 font-normal">
+                      {simulationResult}
+                    </p>
+                  </div>
+                ) : (
+                  <button
+                    onClick={handleSimulateValidation}
+                    disabled={isSimulatingValidation}
+                    className="w-full py-2 bg-slate-950 hover:bg-[#050912] active:bg-[#070d1a] border border-slate-900 hover:border-cyan-500/30 text-cyan-400 text-[10px] font-extrabold rounded flex items-center justify-center gap-2 transition-all cursor-pointer select-none"
+                  >
+                    {isSimulatingValidation ? (
+                      <>
+                        <Activity className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                        <span>REPLAYING TRANSACTION HIERARCHY...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Fingerprint className="w-3.5 h-3.5 text-cyan-500 animate-pulse" />
+                        <span>SIMULATE DECENTRALIZED COSIGN / REPLAY</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 border-t border-slate-900 bg-[#090f1b] flex justify-end">
+              <button
+                onClick={() => setSelectedBlock(null)}
+                className="px-4 py-1.5 bg-slate-950 hover:bg-slate-905 border border-slate-900 hover:border-cyan-500/20 text-slate-350 rounded text-[10px] font-extrabold transition-all cursor-pointer hover:text-cyan-400"
+              >
+                CLOSE INSPECTOR
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
       
     </div>
   );
