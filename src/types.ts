@@ -38,7 +38,7 @@ export interface AnomalyLog {
 
 export interface AlertChannel {
   id: string;
-  type: 'ui_toast' | 'webhook';
+  type: 'ui_toast' | 'webhook' | 'slack' | 'email' | 'sms';
   name: string;
   endpoint?: string;
   active: boolean;

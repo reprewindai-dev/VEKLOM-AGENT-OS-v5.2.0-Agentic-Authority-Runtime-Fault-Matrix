@@ -101,8 +101,7 @@ export default function AnomalyDetector({ onAppendLedger, onStateUpdate, onTrigg
     return points;
   };
 
-  const calculateFTestAndNotify = () => {
-    // Perform variance calculation
+  const updateActiveHUDMetrics = () => {
     const currentRes = resources.find(r => r.id === activeResId);
     if (!currentRes) return;
 
@@ -110,93 +109,43 @@ export default function AnomalyDetector({ onAppendLedger, onStateUpdate, onTrigg
     const n = samples.length;
     if (n < 2) return;
 
-    // Standard deviation is based on samples
     const mean = samples.reduce((acc, v) => acc + v, 0) / n;
     const variance = samples.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0) / (n - 1);
-
-    // Baseline stats - we take stable histories (variance around ~1.5)
     const baselineVariance = 1.62; 
-
-    // Compute F-Ratio
     const computedF = variance / baselineVariance;
     setFStat(parseFloat(computedF.toFixed(3)));
 
-    // Calculate critical value based on alpha
     const criticalF = alpha === 0.05 ? 3.18 : 5.35; // df1=9, df2=9
     setFCritical(criticalF);
 
-    // Approximate p-value logic for curve
     let computedP = 1 / (1 + Math.exp(2 * (computedF - 1)));
     if (computedF < 1) computedP = 1 - computedP;
     setPValue(parseFloat(computedP.toFixed(3)));
-
-    const isAnomalous = computedF > criticalF;
-    const nextState = isAnomalous ? "anomaly" : computedF > (criticalF * 0.7) ? "warning" : "healthy";
-
-    // Update active resource state ONLY if the state actually changed to prevent infinite loops from reference updates
-    if (currentRes.state !== nextState) {
-      setResources(prev =>
-        prev.map(res => {
-          if (res.id === activeResId) {
-            return {
-              ...res,
-              state: nextState
-            };
-          }
-          return res;
-        })
-      );
-    }
-
-    // If statistical threshold is breached, register anomaly
-    if (isAnomalous && !anomalies.some(a => a.resourceId === activeResId && (Date.now() - new Date(a.timestamp).getTime() < 12000))) {
-      triggerAnomalyEvent(currentRes, computedF, criticalF, computedP);
-    }
   };
 
-  const triggerAnomalyEvent = (res: MCPResource, fVal: number, critVal: number, pVal: number) => {
-    const id = `ANM-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
-    const desc = `Hypothesis rejected at alpha = ${alpha}. Variance ratio F=${fVal.toFixed(2)} exceeds critical bound F_crit=${critVal.toFixed(2)}. Suggests systemic drift or vector smuggle trace.`;
-    
-    const newAnom: AnomalyLog = {
-      id,
-      timestamp: new Date().toISOString(),
-      resourceId: res.id,
-      resourceName: res.name,
-      testStatF: fVal,
-      criticalValueF: critVal,
-      pValue: pVal,
-      description: desc,
-      severity: 'critical',
-      automatedResponseTriggered: true
-    };
+  // Update active resource's HUD metrics immediately when selection or confidence alpha level changes
+  useEffect(() => {
+    updateActiveHUDMetrics();
+  }, [activeResId, alpha]);
 
-    setAnomalies(prev => [newAnom, ...prev].slice(0, 15));
-
-    onAppendLedger(
-      'AUTHORITY',
-      `F-Distribution Anomaly Detected: ${res.name}`,
-      `Rejected stable schema hypothesis. Anomaly ID ${id} logged containing p-value: ${pVal}. Systemic quarantine is active.`
-    );
-
-    onTriggerRealtimeNotification(
-      `🚨 Anomaly: ${res.name}`,
-      `Statistical variance breach detected. F-Ratio = ${fVal.toFixed(2)} (Limit: ${critVal.toFixed(2)}).`,
-      {
-        resource: res.name,
-        type: res.type,
-        f_statistic: fVal,
-        p_value: pVal,
-        action: "Spun up emergency ledger constraints"
-      }
-    );
-  };
-
-  // Simulate continuous real-time data feeding with custom noise
+  // Continuously monitors and calculates F-test statistics for ALL resources in parallel
   useEffect(() => {
     const timer = setInterval(() => {
-      setResources(prev =>
-        prev.map(res => {
+      const stateChanges: Array<{
+        resource: MCPResource;
+        oldState: MCPResource['state'];
+        newState: MCPResource['state'];
+        computedF: number;
+        criticalF: number;
+        pValue: number;
+      }> = [];
+
+      let updatedFStat = fStat;
+      let updatedFCritical = fCritical;
+      let updatedPValue = pValue;
+
+      setResources(prev => {
+        return prev.map(res => {
           const noiseLevel = injectedNoise[res.id] || 0;
           let baseVal = res.value;
 
@@ -209,25 +158,115 @@ export default function AnomalyDetector({ onAppendLedger, onStateUpdate, onTrigg
           // Inject user-defined noise directly to variance
           const driftVal = baseVal + (noiseLevel > 0 ? (Math.random() - 0.5) * noiseLevel * 10 : 0);
           
-          let nextHistory = [...res.history, driftVal];
+          const nextHistory = [...res.history, driftVal];
           if (nextHistory.length > 10) nextHistory.shift();
+
+          // Probabilistic F-Test Variance Analysis
+          const n = nextHistory.length;
+          const mean = nextHistory.reduce((acc, v) => acc + v, 0) / n;
+          const variance = nextHistory.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0) / (n - 1);
+          const baselineVariance = 1.62; 
+          const computedF = variance / baselineVariance;
+          const criticalF = alpha === 0.05 ? 3.18 : 5.35; // df1=9, df2=9
+
+          let computedP = 1 / (1 + Math.exp(2 * (computedF - 1)));
+          if (computedF < 1) computedP = 1 - computedP;
+
+          const isAnomalous = computedF > criticalF;
+          const nextState = isAnomalous ? "anomaly" : computedF > (criticalF * 0.7) ? "warning" : "healthy";
+
+          if (res.state !== nextState) {
+            stateChanges.push({
+              resource: res,
+              oldState: res.state,
+              newState: nextState,
+              computedF,
+              criticalF,
+              pValue: computedP
+            });
+          }
+
+          // If this is the active resource in the HUD, track its current metrics
+          if (res.id === activeResId) {
+            updatedFStat = parseFloat(computedF.toFixed(3));
+            updatedFCritical = criticalF;
+            updatedPValue = parseFloat(computedP.toFixed(3));
+          }
+
+          // Update real-time state dashboard
+          onStateUpdate(res.name, parseFloat(driftVal.toFixed(1)), res.unit);
 
           return {
             ...res,
             value: parseFloat(driftVal.toFixed(1)),
-            history: nextHistory
+            history: nextHistory,
+            state: nextState,
+            lastUpdated: new Date().toISOString()
           };
-        })
-      );
+        });
+      });
+
+      // Synchronize active resource HUD displays
+      setFStat(updatedFStat);
+      setFCritical(updatedFCritical);
+      setPValue(updatedPValue);
+
+      // Fire events & notifications for all detected state changes
+      stateChanges.forEach(change => {
+        const res = change.resource;
+        const oldS = change.oldState;
+        const newS = change.newState;
+
+        // Add to review board anomalies list if it crosses critical boundary
+        if (newS === "anomaly") {
+          const id = `ANM-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+          const desc = `Variance ratio F=${change.computedF.toFixed(2)} exceeds critical bound F_crit=${change.criticalF.toFixed(2)} at α=${alpha}. Identified deviation from established stable norms on ${res.name}.`;
+          
+          const newAnom: AnomalyLog = {
+            id,
+            timestamp: new Date().toISOString(),
+            resourceId: res.id,
+            resourceName: res.name,
+            testStatF: change.computedF,
+            criticalValueF: change.criticalF,
+            pValue: change.pValue,
+            description: desc,
+            severity: 'critical',
+            automatedResponseTriggered: true
+          };
+          setAnomalies(prev => [newAnom, ...prev].slice(0, 15));
+        }
+
+        // Write audit entry in Sovereign Ledger
+        onAppendLedger(
+          'AUTHORITY',
+          `Resource State Change: ${res.name}`,
+          `Transitioned from stable ${oldS.toUpperCase()} state to ${newS.toUpperCase()} state. F-statistic calculated at ${change.computedF.toFixed(3)} against F_crit threshold ${change.criticalF.toFixed(2)}.`,
+          "SYS-MCP"
+        );
+
+        // Send immediate alert notification to designated user & external webhooks
+        onTriggerRealtimeNotification(
+          `State Update: ${res.name}`,
+          `State changed to ${newS.toUpperCase()} (F-Ratio: ${change.computedF.toFixed(2)} / Limit: ${change.criticalF.toFixed(2)}). Immediate review recommended.`,
+          {
+            resource: res.name,
+            resource_id: res.id,
+            old_state: oldS,
+            new_state: newS,
+            value: res.value,
+            unit: res.unit,
+            f_ratio: change.computedF,
+            critical_value: change.criticalF,
+            p_value: change.pValue
+          }
+        );
+      });
+
     }, 1200);
 
     return () => clearInterval(timer);
-  }, [injectedNoise]);
-
-  // Triggers recalculations when resources history or parameters change
-  useEffect(() => {
-    calculateFTestAndNotify();
-  }, [resources, alpha, activeResId]);
+  }, [injectedNoise, alpha, activeResId]);
 
   const handleNoiseChange = (resId: string, val: number) => {
     setInjectedNoise(prev => ({

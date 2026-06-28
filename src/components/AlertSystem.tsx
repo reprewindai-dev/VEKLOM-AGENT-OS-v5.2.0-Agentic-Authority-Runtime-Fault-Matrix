@@ -1,20 +1,34 @@
 import React, { useState, useEffect } from 'react';
 import { AlertChannel, NotificationLog } from '../types';
-import { Network, Send, ToggleLeft, Globe, Terminal, Settings2, Trash2 } from 'lucide-react';
+import { Network, Send, ToggleLeft, Globe, Terminal, Settings2, Trash2, UserCheck, Mail, MessageSquare, Phone } from 'lucide-react';
 
 interface AlertSystemProps {
   onAppendLedger: (eventType: string, action: string, memo: string, agentId?: string) => void;
   onStateUpdate: (resourceName: string, value: number, unit: string) => void;
   notificationLog: NotificationLog[];
   setNotificationLog: React.Dispatch<React.SetStateAction<NotificationLog[]>>;
+  webhookUrl: string;
+  setWebhookUrl: (url: string) => void;
+  designatedUser: { name: string; contact: string; type: 'email' | 'sms' | 'slack' };
+  setDesignatedUser: React.Dispatch<React.SetStateAction<{ name: string; contact: string; type: 'email' | 'sms' | 'slack' }>>;
+  channels: AlertChannel[];
+  setChannels: React.Dispatch<React.SetStateAction<AlertChannel[]>>;
+  onTriggerRealtimeAlert: (title: string, message: string, payload: any) => Promise<void>;
 }
 
-export default function AlertSystem({ onAppendLedger, onStateUpdate, notificationLog, setNotificationLog }: AlertSystemProps) {
-  const [webhookUrl, setWebhookUrl] = useState<string>("http://localhost:3000/api/mock-webhook");
-  const [channels, setChannels] = useState<AlertChannel[]>([
-    { id: "CH-001", type: "ui_toast", name: "Internal UI Notification Banner", active: true },
-    { id: "CH-002", type: "webhook", name: "External Webhook Gateway Proxy", active: true }
-  ]);
+export default function AlertSystem({ 
+  onAppendLedger, 
+  onStateUpdate, 
+  notificationLog, 
+  setNotificationLog,
+  webhookUrl,
+  setWebhookUrl,
+  designatedUser,
+  setDesignatedUser,
+  channels,
+  setChannels,
+  onTriggerRealtimeAlert
+}: AlertSystemProps) {
   const [manualMetric, setManualMetric] = useState<string>("Active CPU Core Temperature");
   const [manualVal, setManualVal] = useState<number>(85);
   const [mockLogs, setMockLogs] = useState<any[]>([]);
@@ -42,69 +56,19 @@ export default function AlertSystem({ onAppendLedger, onStateUpdate, notificatio
 
   const triggerManualAlert = async () => {
     setIsFiring(true);
-    const id = `NTF-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
-    const timestamp = new Date().toISOString();
-    
-    // Compile JSON payload
-    const payload = {
-      mcp_resource: manualMetric,
-      state_change: "BREACH_CRITICAL_THRESHOLD",
-      triggered_by: "USER_SIMULATION_BURST",
-      payload_value: manualVal,
-      signature_pda: `OOBEpdaSignatureValue_${Math.random().toString(36).substr(2, 9)}`,
-      timestamp
-    };
-
-    const payloadStr = JSON.stringify(payload, null, 2);
-
-    let logsAdded: NotificationLog = {
-      id,
-      timestamp,
-      type: "THRESHOLD_BREACH",
-      message: `Resource '${manualMetric}' has changed state to state: anomaly with value ${manualVal}`,
-      payload: payloadStr,
-      status: 'pending'
-    };
-
-    // Trigger Outbound server-side POST
-    try {
-      const response = await fetch("/api/trigger-alert", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          url: webhookUrl,
-          payload
-        })
-      });
-
-      const resData = await response.json();
-
-      if (resData.status === "success") {
-        logsAdded.status = 'delivered';
-        onAppendLedger(
-          'EXECUTION',
-          `Fired real-time alert for state change`,
-          `Delivered state change notification payload successfully to webhook url (${webhookUrl}) with status: ${resData.statusCode} OK`
-        );
-      } else {
-        logsAdded.status = 'failed';
-        onAppendLedger(
-          'EXECUTION',
-          `Failed to deliver real-time alert`,
-          `Outbound webhook request to ${webhookUrl} failed: ${resData.error || "Connection Refused"}`
-        );
+    await onTriggerRealtimeAlert(
+      `🚨 Manual Burst: ${manualMetric}`,
+      `User triggered a manual simulation burst. Metric '${manualMetric}' reports abnormal amplitude peak.`,
+      {
+        resource: manualMetric,
+        value: manualVal,
+        unit: manualMetric.includes("Temperature") ? "°C" : manualMetric.includes("Latency") || manualMetric.includes("Delay") ? "ms" : "units",
+        new_state: "anomaly",
+        triggered_by: "USER_SIMULATION_BURST"
       }
-    } catch (err: any) {
-      logsAdded.status = 'failed';
-    }
-
-    setNotificationLog(prev => [logsAdded, ...prev].slice(0, 15));
+    );
     setIsFiring(false);
-
-    // Refresh mock logs straight away
-    setTimeout(fetchWebhookLogs, 1500);
+    setTimeout(fetchWebhookLogs, 1000);
   };
 
   const toggleChannel = (id: string) => {
@@ -160,6 +124,49 @@ export default function AlertSystem({ onAppendLedger, onStateUpdate, notificatio
               <span className="text-[9px] font-mono text-slate-500 mt-1 block">
                 Local verification endpoint: `/api/mock-webhook` logs hits in memory.
               </span>
+            </div>
+
+            {/* Designated User Configuration */}
+            <div className="bg-[#05070a]/40 p-3 rounded-lg border border-slate-900/60">
+              <label className="text-[10px] uppercase font-mono text-cyan-400 font-bold block mb-1.5 flex items-center gap-1.5">
+                <UserCheck className="w-3.5 h-3.5 text-cyan-400" /> Designated Alert Receiver Settings
+              </label>
+              <div className="space-y-2">
+                <div>
+                  <span className="text-[9px] font-mono text-slate-500 block mb-0.5">Contact Name</span>
+                  <input
+                    type="text"
+                    value={designatedUser.name}
+                    onChange={(e) => setDesignatedUser(prev => ({ ...prev, name: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-800 rounded p-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
+                    placeholder="e.g. Dr. Evelyn Vance"
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="col-span-2">
+                    <span className="text-[9px] font-mono text-slate-500 block mb-0.5">Contact Method / Handle</span>
+                    <input
+                      type="text"
+                      value={designatedUser.contact}
+                      onChange={(e) => setDesignatedUser(prev => ({ ...prev, contact: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded p-1.5 text-xs font-mono text-cyan-400 focus:outline-none focus:border-cyan-500"
+                      placeholder="e.g. evelyn@veklom.agency"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-mono text-slate-500 block mb-0.5">Channel Type</span>
+                    <select
+                      value={designatedUser.type}
+                      onChange={(e) => setDesignatedUser(prev => ({ ...prev, type: e.target.value as any }))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded p-1.5 text-xs font-mono text-slate-350 focus:outline-none focus:border-cyan-500"
+                    >
+                      <option value="email">Email</option>
+                      <option value="sms">SMS</option>
+                      <option value="slack">Slack</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Channels List */}

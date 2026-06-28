@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LedgerBlock, NotificationLog } from './types';
+import { LedgerBlock, NotificationLog, AlertChannel } from './types';
 import GridSimulator from './components/GridSimulator';
 import AnomalyDetector from './components/AnomalyDetector';
 import AlertSystem from './components/AlertSystem';
@@ -51,6 +51,17 @@ export default function App() {
   ]);
 
   const [notificationLog, setNotificationLog] = useState<NotificationLog[]>([]);
+  const [webhookUrl, setWebhookUrl] = useState<string>("http://localhost:3000/api/mock-webhook");
+  const [designatedUser, setDesignatedUser] = useState<{ name: string; contact: string; type: 'email' | 'sms' | 'slack' }>({
+    name: "Dr. Evelyn Vance",
+    contact: "evelyn.vance@veklom.agency",
+    type: 'email'
+  });
+  const [channels, setChannels] = useState<AlertChannel[]>([
+    { id: "CH-001", type: "ui_toast", name: "Internal UI Notification Banner", active: true },
+    { id: "CH-002", type: "webhook", name: "External Webhook Gateway Proxy", active: true },
+    { id: "CH-003", type: "slack", name: "Designated User Dispatcher (Email)", active: true }
+  ]);
 
   // Consolidated real-time Telemetry metrics shared across components
   const [telemetry, setTelemetry] = useState<Record<string, { value: number; unit: string }>>({
@@ -93,20 +104,86 @@ export default function App() {
     }));
   };
 
-  // Helper to trigger a notification popup
-  const handleTriggerRealtimeNotification = (title: string, message: string, payload: object) => {
+  // Helper to trigger a notification popup, send webhooks and dispatch designated user alerts
+  const handleTriggerRealtimeNotification = async (title: string, message: string, payload: any) => {
     const id = `NTF-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
     const timestamp = new Date().toISOString();
     
-    // Auto append to notification logs
-    const log: NotificationLog = {
+    // Compile JSON payload containing all necessary resource data
+    const alertPayload = {
+      mcp_resource: payload?.resource || title,
+      state_change: payload?.new_state || "ANOMALY_TRIGGERED",
+      payload_value: payload?.value || 0,
+      unit: payload?.unit || "",
+      message: message,
+      signature_pda: `OOBEpdaSignatureValue_${Math.random().toString(36).substr(2, 9)}`,
+      timestamp,
+      designated_user: designatedUser,
+      ...payload
+    };
+
+    const payloadStr = JSON.stringify(alertPayload, null, 2);
+
+    let log: NotificationLog = {
       id,
       timestamp,
-      type: "ANOMALY_TRIGGERED",
+      type: payload?.new_state || "ANOMALY_TRIGGERED",
       message: `${title}: ${message}`,
-      payload: JSON.stringify(payload, null, 2),
-      status: 'delivered'
+      payload: payloadStr,
+      status: 'pending'
     };
+
+    // 1. Send immediate alert to external webhook if active
+    const webhookChan = channels.find(c => c.id === "CH-002");
+    if (webhookChan?.active && webhookUrl) {
+      try {
+        const response = await fetch("/api/trigger-alert", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            url: webhookUrl,
+            payload: alertPayload
+          })
+        });
+
+        if (response.ok) {
+          const resData = await response.json();
+          if (resData.status === "success") {
+            log.status = 'delivered';
+            handleAppendLedger(
+              'EXECUTION',
+              `Fired real-time alert for state change: ${payload?.resource || title}`,
+              `Delivered state change notification payload successfully to webhook url (${webhookUrl}) with status: ${resData.statusCode} OK`
+            );
+          } else {
+            log.status = 'failed';
+            handleAppendLedger(
+              'EXECUTION',
+              `Failed to deliver real-time alert for ${payload?.resource || title}`,
+              `Outbound webhook request to ${webhookUrl} failed: ${resData.error || "Connection Refused"}`
+            );
+          }
+        } else {
+          log.status = 'failed';
+        }
+      } catch (err: any) {
+        log.status = 'failed';
+      }
+    } else {
+      log.status = 'delivered'; // Delivered to internal logs
+    }
+
+    // 2. Alert designated user if active
+    const userChan = channels.find(c => c.id === "CH-003");
+    if (userChan?.active) {
+      handleAppendLedger(
+        'AUTHORITY',
+        `Dispatched Designated User Notice: ${designatedUser.name}`,
+        `Transmitted alert regarding '${payload?.resource || title}' state change to ${designatedUser.contact} via secure ${designatedUser.type.toUpperCase()} gateway.`
+      );
+    }
 
     setNotificationLog(prev => [log, ...prev].slice(0, 15));
   };
@@ -273,6 +350,13 @@ export default function App() {
               onStateUpdate={handleStateUpdate}
               notificationLog={notificationLog}
               setNotificationLog={setNotificationLog}
+              webhookUrl={webhookUrl}
+              setWebhookUrl={setWebhookUrl}
+              designatedUser={designatedUser}
+              setDesignatedUser={setDesignatedUser}
+              channels={channels}
+              setChannels={setChannels}
+              onTriggerRealtimeAlert={handleTriggerRealtimeNotification}
             />
           </div>
 
